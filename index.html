@@ -46,6 +46,7 @@ label.l{display:block;font-size:.8rem;color:var(--mut);margin:12px 0 4px;font-we
 .bar .in{max-width:680px;margin:0 auto;display:flex;gap:8px}
 .fab{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:30;border-radius:999px;min-height:64px;padding:0 24px;box-shadow:0 6px 20px #000a}
 .mic{min-width:56px;padding:0;flex:0 0 56px;font-size:1.3rem}
+.mic.on{background:var(--acc);color:var(--accTx);border-color:var(--acc)}
 .mic.rec-on{background:var(--bad);border-color:var(--bad);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.6}}
 .toast{position:fixed;left:12px;right:12px;bottom:calc(100px + env(safe-area-inset-bottom));background:#fff;color:#111;padding:14px 16px;border-radius:14px;z-index:40;font-weight:600;max-width:656px;margin:0 auto;box-shadow:0 6px 24px #000a}
@@ -154,6 +155,43 @@ const norm=s=>String(s||'').toLowerCase().replace(/[.,;:()´`'’"“”\/!?\-]/
 const uid=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
 function isoWeek(d=new Date()){const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));const day=t.getUTCDay()||7;t.setUTCDate(t.getUTCDate()+4-day);const y0=new Date(Date.UTC(t.getUTCFullYear(),0,1));return Math.ceil(((t-y0)/86400000+1)/7)}
 const kwNow=()=>'KW'+String(isoWeek()).padStart(2,'0');
+const DIGITW={null:'0',nul:'0',eins:'1',zwei:'2',zwo:'2',drei:'3',vier:'4',fünf:'5',sechs:'6',sieben:'7',acht:'8',neun:'9'};
+function normalizeSpoken(s){
+ let t=String(s||'').toLowerCase().trim().replace(/[.!?]+$/,'');
+ const only=/^((of|ma|o f|m a)[\s:\-]*)?((null|nul|eins|zwei|zwo|drei|vier|fünf|sechs|sieben|acht|neun|\d+)[\s,.\-]*)+$/;
+ if(only.test(t)){
+  t=t.replace(/\b(null|nul|eins|zwei|zwo|drei|vier|fünf|sechs|sieben|acht|neun)\b/g,w=>DIGITW[w]).replace(/\bo f\b/,'of').replace(/\bm a\b/,'ma');
+  t=t.replace(/[,.\-]/g,'').replace(/(\d)\s+(?=\d)/g,'$1');
+  t=t.replace(/^(of|ma)[\s:]*/,'$1 ').trim();
+ }
+ return t;
+}
+function rank(r,q){
+ const qq=normalizeSpoken(q);if(!qq)return 1;
+ const idKey=String(r.v.id||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+ const idDig=idKey.replace(/^[A-Z]+/,'');
+ const qs=qq.toUpperCase().replace(/[^A-Z0-9]/g,'');
+ const hay=norm([r.v.id,r.v.name,r.v.raum,r.v.zul,r.v.mang,r.v.thermo].join(' '));
+ if(/^\d+$/.test(qs)){
+  if(idDig&&idDig.endsWith(qs))return 100+Math.min(qs.length,9);
+  if(idDig&&idDig.includes(qs))return 60;
+  return hay.includes(qq)?20:-1;
+ }
+ const m=qs.match(/^([A-Z]{1,3})(\d+)$/);
+ if(m){
+  if(idKey.startsWith(m[1])&&idDig.endsWith(m[2]))return 110+Math.min(m[2].length,9);
+  if(idKey.startsWith(m[1])&&idDig.includes(m[2]))return 70;
+ }
+ return norm(qq).split(' ').every(w=>hay.includes(w))?10:-1;
+}
+function search(list,q){
+ if(!String(q||'').trim())return list;
+ return list.map((r,i)=>({r,i,k:rank(r,q)})).filter(x=>x.k>0).sort((a,b)=>b.k-a.k||a.i-b.i).map(x=>x.r);
+}
+function sheetPrefix(name){
+ const c={};S.records.filter(r=>r.sheet===name).forEach(r=>{const m=String(r.v.id||'').match(/^[A-Za-z]+/);if(m)c[m[0]]=(c[m[0]]||0)+1});
+ return Object.entries(c).sort((a,b)=>b[1]-a[1])[0]?.[0]||'OF';
+}
 function cellStr(v){
  if(v==null)return '';
  if(typeof v==='object'){
@@ -381,7 +419,7 @@ async function loadBackup(file){
 
 /* ============ Diktat ============ */
 let rec=null;
-function startDictation(btn,target){
+function startDictation(btn,target,opts){
  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
  if(!SR){toast('Diktat in der App nicht möglich. Nimm das Mikrofon der Tastatur.',true);target.focus();return}
  if(rec){try{rec.stop()}catch(e){}rec=null;document.querySelectorAll('.mic.rec-on').forEach(b=>b.classList.remove('rec-on'));return}
@@ -389,7 +427,7 @@ function startDictation(btn,target){
  let got=false;
  r.onresult=e=>{
   const t=Array.from(e.results).map(x=>x[0].transcript).join(' ').trim();
-  if(t){got=true;const cur=target.value;target.value=(cur&&!/\s$/.test(cur)?cur+' ':cur)+t;target.dispatchEvent(new Event('input',{bubbles:true}))}
+  if(t){got=true;if(opts&&opts.replace){target.value=normalizeSpoken(t)}else{const cur=target.value;target.value=(cur&&!/\s$/.test(cur)?cur+' ':cur)+t}target.dispatchEvent(new Event('input',{bubbles:true}))}
  };
  r.onerror=e=>{
   const m={'not-allowed':'Mikrofon nicht erlaubt. Nimm das Mikrofon der Tastatur.','network':'Kein Netz für das Diktat. Nimm das Mikrofon der Tastatur.','no-speech':'Nichts gehört.','audio-capture':'Kein Mikrofon gefunden.'}[e.error]||('Diktat-Fehler: '+e.error);
@@ -453,19 +491,17 @@ function stats(name){
  const rs=S.records.filter(r=>r.sheet===name);
  return {n:rs.length,m:rs.filter(r=>(r.v.mang||'').trim()).length,c:rs.filter(changed).length};
 }
-function recCard(r){
+function searchRow(ph){
+ return `<div class="row" style="margin-top:10px;align-items:stretch"><input id="q" type="search" enterkeyhint="search" inputmode="${S.settings.numpad?'numeric':'search'}" placeholder="${ph}" value="${esc(U.q)}" style="font-size:1.15rem"><button class="mic" data-act="mic" data-t="q" aria-label="Suche diktieren">🎤</button><button class="mic ${S.settings.numpad?'on':''}" data-act="numpad" aria-label="Ziffernblock" style="font-size:.85rem">123</button></div>`;
+}
+function recCard(r,showSheet){
  const ch=changed(r);
  return `<button class="rec ${ch?'ch':''}" data-act="open" data-id="${r.uid}">
-  <div><span class="id">${esc(r.v.id||'(ohne ID)')}</span>${r.isNew?'<span class="badge new">neu</span>':ch?'<span class="badge">geändert</span>':''}</div>
+  <div><span class="id">${esc(r.v.id||'(ohne ID)')}</span>${showSheet?`<span class="badge" style="background:#475569">${esc(r.sheet)}</span>`:''}${r.isNew?'<span class="badge new">neu</span>':ch?'<span class="badge">geändert</span>':''}</div>
   <div>${esc(r.v.name)}</div>
   <div class="mut" style="font-size:.8rem">${esc((r.v.raum||'').replace(/\n/g,' · '))}</div>
   ${(r.v.mang||'').trim()?`<div class="mg">⚠ ${esc(r.v.mang)}</div>`:''}
  </button>`;
-}
-function matches(r,q){
- if(!q)return true;
- const hay=norm([r.v.id,r.v.name,r.v.raum,r.v.zul,r.v.mang,r.v.thermo].join(' '));
- return norm(q).split(' ').every(w=>hay.includes(w));
 }
 function renderHome(){
  let h=header('Prüf-App Verteiler',false,S.records.length?'<button class="sm" data-act="settings">⚙</button>':'');
@@ -476,11 +512,11 @@ function renderHome(){
   <p class="mut">Tipp: Danach „Zum Startbildschirm hinzufügen“ im Chrome-Menü, dann ist es wie eine App.</p>`;
   return h;
  }
- h+=`<div style="margin-top:10px"><input id="q" type="search" placeholder="🔍 Suche: OF-Nr., Verteiler, Raum …" value="${esc(U.q)}"></div>`;
+ h+=searchRow('🔍 Nummer (z. B. 3410), Name oder Raum');
  if(S.dirty>0)h+=`<div class="banner">⚠ ${S.dirty} Änderung(en) noch nicht als Excel exportiert.</div>`;
  if(U.q.trim()){
-  const res=S.records.filter(r=>matches(r,U.q));
-  h+=`<p class="mut">${res.length} Treffer${res.length>40?' (erste 40)':''}</p>`+res.slice(0,40).map(recCard).join('');
+  const res=search(S.records,U.q);
+  h+=`<p class="mut">${res.length} Treffer${res.length>50?' (erste 50)':''}</p>`+res.slice(0,50).map(r=>recCard(r,true)).join('');
   return h;
  }
  h+='<h2>Gebäude</h2><div class="grid2">'+S.sheets.map(n=>{const s=stats(n);return `<button class="tile" data-act="sheet" data-s="${esc(n)}"><b>${esc(n)}</b><small>${s.n} Verteiler<br>${s.m} mit Mängeln${s.c?`<br><span style="color:#5aa9ff">${s.c} geändert/neu</span>`:''}</small></button>`}).join('')+'</div>';
@@ -496,10 +532,10 @@ function renderList(){
  if(U.filter==='m')rs=rs.filter(r=>(r.v.mang||'').trim());
  if(U.filter==='n')rs=rs.filter(r=>!(r.v.mang||'').trim());
  if(U.filter==='c')rs=rs.filter(changed);
- rs=rs.filter(r=>matches(r,U.q));
+ rs=search(rs,U.q);
  const f=(k,t)=>`<button class="chip ${U.filter===k?'on':''}" data-act="filter" data-f="${k}" style="min-height:44px">${t}</button>`;
  return header(name+' · '+s.n,true)+
- `<div style="margin-top:10px"><input id="q" type="search" placeholder="🔍 Suche in ${esc(name)}" value="${esc(U.q)}"></div>
+ searchRow('🔍 Suche in '+esc(name))+`
  <div class="chips" style="margin:10px 0">${f('all','Alle')}${f('m','Mit Mängeln')}${f('n','Ohne')}${f('c','Geändert/neu')}</div>
  <p class="mut" style="margin:0">${rs.length} angezeigt</p>`+rs.map(recCard).join('')+
  `<button class="pri fab" data-act="new">＋ Neuer Verteiler</button>`;
@@ -579,7 +615,7 @@ function newRecord(copyFrom){
  const m=S.meta[U.sheet]||{};
  const v={};FIELDS.forEach(f=>v[f.k]='');
  if(copyFrom){['name','zul','bt','raum','rcd','thermo'].forEach(k=>v[k]=copyFrom.v[k]||'');v.id=(copyFrom.v.id||'').replace(/\d+$/,'')}
- else{v.bt=m.topBt||'';v.id='OF'}
+ else{v.bt=m.topBt||'';v.id=sheetPrefix(U.sheet)}
  const r={uid:uid(),sheet:U.sheet,row:null,isNew:true,_fresh:true,v,o:null};
  S.records.push(r);
  U.sel=new Set();U.rest='';
@@ -624,7 +660,8 @@ document.addEventListener('click',async e=>{
  else if(a==='chip'){const c=b.dataset.c;U.sel.has(c)?U.sel.delete(c):U.sel.add(c);U.dirtyForm=true;collectDraft();render()}
  else if(a==='save')saveEdit();
  else if(a==='kw'){const i=$('#f_'+b.dataset.k);i.value=kwNow();U.dirtyForm=true}
- else if(a==='mic'){const t=document.getElementById(b.dataset.t);startDictation(b,t)}
+ else if(a==='mic'){const t=document.getElementById(b.dataset.t);startDictation(b,t,b.dataset.t==='q'?{replace:true}:null)}
+ else if(a==='numpad'){S.settings.numpad=!S.settings.numpad;persist();render();const q=$('#q');if(q)q.focus()}
  else if(a==='ai')aiOrder();
  else if(a==='addkey'){
   const t=($('#rest').value||'').trim();if(!t){toast('Erst Text diktieren oder tippen.',true);return}
@@ -654,6 +691,9 @@ document.addEventListener('input',e=>{
  else if(t.dataset&&t.dataset.fk){U.dirtyForm=true;U.draft[t.dataset.fk]=t.value}
  else if(t.id==='rest'){U.dirtyForm=true;U.rest=t.value;const p=document.querySelector('.preview');if(p)p.textContent='So steht es in Excel (Spalte Mängel):\n'+(composeMang(U.sel,U.rest)||'– kein Mangel –')}
  else if(t.dataset&&t.dataset.cid){const c=S.catalog.find(x=>x.id===t.dataset.cid);if(c){c.text=t.value;persist()}}
+});
+document.addEventListener('keydown',e=>{
+ if(e.key==='Enter'&&e.target&&e.target.id==='q'){e.preventDefault();const first=document.querySelector('.rec[data-act=open]');if(first){e.target.blur();first.click()}}
 });
 $('#fx').addEventListener('change',e=>{const f=e.target.files[0];e.target.value='';if(f)importXlsx(f)});
 $('#fj').addEventListener('change',e=>{const f=e.target.files[0];e.target.value='';if(f)loadBackup(f)});
